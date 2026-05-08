@@ -1,0 +1,138 @@
+default:
+  image: docker:25.0.3-dind
+  tags:
+    - arm64-runner
+  before_script:
+    # Install git + certs (docker:dind is minimal)
+    - apk add --no-cache git openssh-client ca-certificates
+    # Start Docker daemon inside the job container
+    - dockerd -l fatal &
+    - sleep 5
+
+variables:
+  # Kubernetes resources
+  KUBERNETES_CPU_REQUEST: "4"
+  KUBERNETES_MEMORY_REQUEST: "16G"
+  KUBERNETES_EPHEMERAL_STORAGE_REQUEST: "40G"
+  KUBERNETES_POD_ANNOTATIONS_1: "MOUNT_EFS=/data"
+
+  # Docker image details
+  IMAGE_REGISTRY: artifacts.codelinaro.org
+  IMAGE_PATH: iot-solutions-microservices
+  IMAGE_NAME: genai-llm-vlm-service
+  IMAGE_TAG: 1.0.0
+
+  FULL_IMAGE_NAME: "${IMAGE_REGISTRY}/${IMAGE_PATH}/${IMAGE_NAME}:${IMAGE_TAG}"
+  FULL_IMAGE_LATEST: "${IMAGE_REGISTRY}/${IMAGE_PATH}/${IMAGE_NAME}:latest"
+
+  DOCKER_BUILDKIT: "1"
+  TARGET_ARCH: "linux/arm64"
+
+  # ---------------------------------------------------------
+  # Source fetch details (CodeLinaro GitLab)
+  # ---------------------------------------------------------
+  SOLUTIONS_MICROSERVICES_REPO_URL: "https://git.codelinaro.org/clo/le/solutions-microservices.git"
+  SOLUTIONS_MICROSERVICES_BRANCH: "iot-solutions.lnx.1.0"
+  SOLUTIONS_MICROSERVICES_COMMIT: "7af74fb93f145d3105e498879de698f277ecaf76"
+  LLM_VLM_SRC_DIR: "genai/src"
+  LLM_VLM_DOCKERFILE: "Dockerfile.chatcompletion"
+
+stages:
+  - build
+  - test
+
+# ---------------------------------------------------------
+# Build & push the final runtime image (version + latest)
+# ---------------------------------------------------------
+build-image:
+  stage: build
+  script:
+    - echo "Checking Docker daemon"
+    - docker version
+    - docker info
+
+    - echo "Logging into JFrog Docker registry"
+    - echo "$JFROG_PASSWORD" | docker login -u "$JFROG_USERNAME" --password-stdin "$IMAGE_REGISTRY"
+
+    - echo "Cloning solutions-microservices from CodeLinaro"
+    - rm -rf solutions-microservices
+    - git clone --no-tags --single-branch --branch "${SOLUTIONS_MICROSERVICES_BRANCH}" "${SOLUTIONS_MICROSERVICES_REPO_URL}" solutions-microservices
+    - cd solutions-microservices
+    - git fetch --depth 1 origin "${SOLUTIONS_MICROSERVICES_COMMIT}"
+    - git checkout "${SOLUTIONS_MICROSERVICES_COMMIT}"
+    - git rev-parse HEAD
+
+    - echo "Building GenAI LLM/VLM Docker image (ARM64) from checked-out sources"
+    - cd "${LLM_VLM_SRC_DIR}"
+    - |
+      docker build \
+        --platform "${TARGET_ARCH}" \
+        --target genai-llm-vlm-service \
+        -t "${FULL_IMAGE_NAME}" \
+        -f "${LLM_VLM_DOCKERFILE}" \
+        .
+
+    # Ensure local 'latest' tag doesn't point to an older image before re-tagging
+    - echo "Clearing any existing local :latest tag (safe if missing)"
+    - docker rmi "${FULL_IMAGE_LATEST}" 2>/dev/null || true
+
+    - echo "Tagging the just-built image as :latest"
+    - docker tag "${FULL_IMAGE_NAME}" "${FULL_IMAGE_LATEST}"
+
+    - echo "Pushing versioned image to Artifactory"
+    - docker push "${FULL_IMAGE_NAME}"
+
+    - echo "Pushing :latest tag to Artifactory"
+    - docker push "${FULL_IMAGE_LATEST}"
+
+# ---------------------------------------------------------
+# Smoke test: run container from the built image
+# ---------------------------------------------------------
+test-with-image:
+  stage: test
+  needs: ["build-image"]
+  script:
+    - echo "Logging into JFrog"
+    - echo "$JFROG_PASSWORD" | docker login -u "$JFROG_USERNAME" --password-stdin "$IMAGE_REGISTRY"
+
+    - echo "Running GenAI runtime smoke test on :latest"
+    - |
+      docker run --rm \
+        --entrypoint /bin/bash \
+        -e GENAI_PORT=9001 \
+        -e LOG_LEVEL=ERROR \
+        "${FULL_IMAGE_LATEST}" \
+        -c "
+          echo '== OS ==' &&
+          cat /etc/os-release &&
+          echo '== Python ==' &&
+          python3 --version &&
+          echo '== Site packages ==' &&
+          ls -l /iot-user/app/site-packages &&
+          echo '== Native libs ==' &&
+          ls -l /usr/lib/libvlmservice.so /usr/lib/libllmservice.so &&
+          echo '== Interface ==' &&
+          test -f /usr/include/genai_interface.h &&
+          echo 'Smoke test (latest) PASSED'
+        "
+
+    - echo "Running GenAI runtime smoke test on versioned tag"
+    - |
+      docker run --rm \
+        --entrypoint /bin/bash \
+        -e GENAI_PORT=9001 \
+        -e LOG_LEVEL=ERROR \
+        "${FULL_IMAGE_NAME}" \
+        -c "
+          echo '== OS ==' &&
+          cat /etc/os-release &&
+          echo '== Python ==' &&
+          python3 --version &&
+          echo '== Site packages ==' &&
+          ls -l /iot-user/app/site-packages &&
+          echo '== Native libs ==' &&
+          ls -l /usr/lib/libvlmservice.so /usr/lib/libllmservice.so &&
+          echo '== Interface ==' &&
+          test -f /usr/include/genai_interface.h &&
+          echo 'Smoke test (versioned) PASSED'
+        "
