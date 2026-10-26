@@ -20,7 +20,7 @@ variables:
   IMAGE_REGISTRY: artifacts.codelinaro.org
   IMAGE_PATH: iot-solutions-microservices
   IMAGE_NAME: genai-llm-vlm-service
-  IMAGE_TAG: 1.5.0
+  IMAGE_TAG: 1.6.0
 
   FULL_IMAGE_NAME: "${IMAGE_REGISTRY}/${IMAGE_PATH}/${IMAGE_NAME}:${IMAGE_TAG}"
   FULL_IMAGE_LATEST: "${IMAGE_REGISTRY}/${IMAGE_PATH}/${IMAGE_NAME}:latest"
@@ -33,7 +33,7 @@ variables:
   # ---------------------------------------------------------
   SOLUTIONS_MICROSERVICES_REPO_URL: "https://git.codelinaro.org/clo/le/solutions-microservices.git"
   SOLUTIONS_MICROSERVICES_BRANCH: "iot-solutions.lnx.1.0"
-  SOLUTIONS_MICROSERVICES_COMMIT: "a169f63047fc4b6c04d828367f7d720d345034e3"
+  SOLUTIONS_MICROSERVICES_COMMIT: "5f2865445101c75915c5a435b2b9aa893bc4099c"
   LLM_VLM_SRC_DIR: "microservices/llm-vlm/chatcompletions/src/"
   LLM_VLM_DOCKERFILE: "Dockerfile.chatcompletion"
 
